@@ -161,7 +161,7 @@ def build_embed(item: dict, matched_keyword: str) -> discord.Embed:
     embed.add_field(name="👤 Vendeur", value=f"[{seller}](https://www.vinted.pl/member/{seller_id})",  inline=True)
     embed.add_field(name="🔍 Mot-clé", value=f"`{matched_keyword}`",                                  inline=False)
     if thumbnail:
-        embed.set_thumbnail(url=thumbnail)
+        embed.set_image(url=thumbnail)
     embed.set_footer(text=f"Vinted Bot Pro  •  vinted.pl 🇵🇱  •  max {PRIX_MAX_PLN} PLN  •  < {MAX_AGE_HOURS}h")
     return embed
 
