@@ -87,13 +87,10 @@ def get_headers() -> dict:
         "User-Agent":      random.choice(USER_AGENTS),
         "Accept":          "application/json, text/plain, */*",
         "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Referer":         "https://www.vinted.pl/",
         "Origin":          "https://www.vinted.pl",
         "DNT":             "1",
-        "Sec-Fetch-Dest":  "empty",
-        "Sec-Fetch-Mode":  "cors",
-        "Sec-Fetch-Site":  "same-origin",
     }
 
 
