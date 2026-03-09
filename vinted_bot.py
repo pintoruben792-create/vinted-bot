@@ -4,12 +4,13 @@ import aiohttp
 import asyncio
 from datetime import datetime, timezone, timedelta
 import os
+import random
 
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
 CHANNEL_ID   = int(os.environ["CHANNEL_ID"])
 PING_ROLE_ID = int(os.environ["PING_ROLE_ID"]) if os.environ.get("PING_ROLE_ID") else None
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 45
 PRIX_MAX_PLN   = 210
 MAX_AGE_HOURS  = 2
 
@@ -37,18 +38,23 @@ KEYWORDS = [
     "spodnie nike running division",
     "nike running division jacket",
     "nike running division pants",
+    "kurtka under armour",
+    "jacket under armour",
+    "spodnie under armour",
 ]
 
 VINTED_API  = "https://www.vinted.pl/api/v2/catalog/items"
 VINTED_ITEM = "https://www.vinted.pl/items/{id}"
 VINTED_HOME = "https://www.vinted.pl"
 
-HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept":          "application/json, text/plain, */*",
-    "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
-    "Referer":         "https://www.vinted.pl/",
-}
+# Plusieurs User-Agents pour rotation
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+]
 
 COLOR_DEAL   = 0x00FF88
 COLOR_NORMAL = 0x5865F2
@@ -62,13 +68,31 @@ seen_ids: set[str] = set()
 vinted_cookie: str | None = None
 
 
+def get_headers() -> dict:
+    """Retourne des headers avec un User-Agent aléatoire."""
+    return {
+        "User-Agent":      random.choice(USER_AGENTS),
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer":         "https://www.vinted.pl/",
+        "Origin":          "https://www.vinted.pl",
+        "DNT":             "1",
+        "Connection":      "keep-alive",
+    }
+
+
 async def refresh_cookie(session: aiohttp.ClientSession) -> str | None:
     try:
-        async with session.get(VINTED_HOME, headers=HEADERS, allow_redirects=True) as r:
+        hdrs = get_headers()
+        async with session.get(VINTED_HOME, headers=hdrs, allow_redirects=True) as r:
             cookies = session.cookie_jar.filter_cookies(VINTED_HOME)
-            return "; ".join(f"{k}={v.value}" for k, v in cookies.items()) or None
+            result = "; ".join(f"{k}={v.value}" for k, v in cookies.items())
+            if result:
+                print(f"[COOKIE] Nouveau cookie récupéré ✅")
+            return result or None
     except Exception as e:
-        print(f"[COOKIE] {e}")
+        print(f"[COOKIE] Erreur : {e}")
         return None
 
 
@@ -81,21 +105,43 @@ async def fetch_keyword(session: aiohttp.ClientSession, keyword: str, semaphore:
         "price_to":    PRIX_MAX_PLN,
         "currency":    "PLN",
     }
-    hdrs = {**HEADERS}
+    hdrs = get_headers()
     if vinted_cookie:
         hdrs["Cookie"] = vinted_cookie
-    timeout = aiohttp.ClientTimeout(total=15)
+
+    timeout = aiohttp.ClientTimeout(total=20)
+
     async with semaphore:
+        # Délai aléatoire pour ne pas se faire bloquer
+        await asyncio.sleep(random.uniform(0.3, 1.2))
         try:
             async with session.get(VINTED_API, params=params, headers=hdrs, timeout=timeout) as resp:
                 if resp.status in (401, 403):
+                    print(f"[FETCH] '{keyword}' → Accès refusé, renouvellement cookie...")
                     vinted_cookie = await refresh_cookie(session)
                     hdrs["Cookie"] = vinted_cookie or ""
+                    await asyncio.sleep(2)
                     async with session.get(VINTED_API, params=params, headers=hdrs, timeout=timeout) as r2:
+                        text = await r2.text()
+                        if not text or text.strip() == "":
+                            return []
                         data = await r2.json(content_type=None)
+                elif resp.status == 200:
+                    text = await resp.text()
+                    if not text or text.strip() == "":
+                        print(f"[FETCH] '{keyword}' → Réponse vide (Vinted bloque)")
+                        return []
+                    try:
+                        import json
+                        data = json.loads(text)
+                    except Exception:
+                        return []
                 else:
-                    data = await resp.json(content_type=None)
+                    print(f"[FETCH] '{keyword}' → Status {resp.status}")
+                    return []
+
             return data.get("items", [])
+
         except Exception as e:
             print(f"[FETCH] '{keyword}' → {e}")
             return []
@@ -147,7 +193,7 @@ def build_embed(item: dict, matched_keyword: str) -> discord.Embed:
     seller    = item.get("user", {}).get("login", "?")
     seller_id = item.get("user", {}).get("id", "")
     photos    = item.get("photos", [])
-    thumbnail = photos[0].get("url", "") if photos else ""
+    image_url = photos[0].get("url", "") if photos else ""
     ratio     = price_val / PRIX_MAX_PLN
     badge     = "🔥 SUPER DEAL" if ratio < 0.5 else ("✅ BON PRIX" if ratio < 0.8 else "📦 NOUVEAU")
     color     = COLOR_DEAL if ratio < 0.5 else (COLOR_NORMAL if ratio < 0.8 else COLOR_WARN)
@@ -160,8 +206,8 @@ def build_embed(item: dict, matched_keyword: str) -> discord.Embed:
     embed.add_field(name="👕 Marque",  value=brand,                                                    inline=True)
     embed.add_field(name="👤 Vendeur", value=f"[{seller}](https://www.vinted.pl/member/{seller_id})",  inline=True)
     embed.add_field(name="🔍 Mot-clé", value=f"`{matched_keyword}`",                                  inline=False)
-    if thumbnail:
-        embed.set_image(url=thumbnail)
+    if image_url:
+        embed.set_image(url=image_url)  # Grande image en bas
     embed.set_footer(text=f"Vinted Bot Pro  •  vinted.pl 🇵🇱  •  max {PRIX_MAX_PLN} PLN  •  < {MAX_AGE_HOURS}h")
     return embed
 
@@ -174,7 +220,13 @@ async def check_vinted():
         print(f"[BOT] Canal {CHANNEL_ID} introuvable !")
         return
 
-    semaphore = asyncio.Semaphore(6)
+    # Renouvelle le cookie toutes les 10 minutes
+    if random.randint(1, 13) == 1:
+        async with aiohttp.ClientSession() as s:
+            vinted_cookie = await refresh_cookie(s)
+
+    semaphore = asyncio.Semaphore(4)  # Max 4 requêtes simultanées (moins agressif)
+
     async with aiohttp.ClientSession() as session:
         if not vinted_cookie:
             vinted_cookie = await refresh_cookie(session)
@@ -212,7 +264,7 @@ async def check_vinted():
                 if role:
                     ping_content = role.mention
             await channel.send(content=ping_content, embed=build_embed(item, matched_kw))
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.5)
             new_count += 1
 
         ts = datetime.now().strftime("%H:%M:%S")
@@ -305,7 +357,7 @@ async def on_ready():
     ))
 
     print("\n🔄 Pré-chargement des annonces existantes...")
-    semaphore = asyncio.Semaphore(6)
+    semaphore = asyncio.Semaphore(4)
     async with aiohttp.ClientSession() as session:
         global vinted_cookie
         vinted_cookie = await refresh_cookie(session)
