@@ -29,7 +29,6 @@ KEYWORDS = [
     "nike running division",
     "nike windrunner",
     "nike wind runner",
-    "nike tech",
     "nike tech fleece",
     "nike tech hoodie",
     "nike trail jacket",
